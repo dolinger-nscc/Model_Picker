@@ -1,10 +1,15 @@
 """
-cluster_picker.py
-=================
+cluster_picker_v2.py
+====================
 
 PyCaret-style model selection for CLUSTERING (unsupervised, no target) using
 scikit-learn. It follows the same pattern as regression_picker.py and
 classification_picker.py, so students learn one interface for all three.
+
+Version 2 adds charts (matplotlib, loaded only when a plot_ method is called):
+  plot_k_scan()  plot_leaderboard()  plot_tuning()  plot_clusters()
+  plot_silhouette()  plot_profile()  plot_crosstab()
+Each returns the matplotlib Axes (or Figure), so it can be restyled or saved.
 
 The module does four jobs:
   1. k_scan()          -> elbow / silhouette / BIC table for choosing the number of clusters
@@ -48,7 +53,7 @@ bool columns are one-hot encoded.
 
 Example
 -------
->>> from cluster_picker import ClusterPicker
+>>> from cluster_picker_v2 import ClusterPicker
 >>> cl = ClusterPicker(df)
 >>> cl.k_scan()                    # how many clusters?
 >>> cl.compare_models()            # leaderboard
@@ -56,6 +61,8 @@ Example
 >>> cl.recommended_params_         # {model_id: {param: value}}
 >>> cl.profile("kmeans")           # average feature values per cluster
 >>> out = cl.assign_clusters("kmeans")   # df with a new 'Cluster' column
+>>> cl.plot_k_scan()               # charts: see the plot_ methods
+>>> cl.plot_clusters()
 """
 
 from __future__ import annotations
@@ -207,6 +214,141 @@ def _knee(values: np.ndarray) -> float:
     yn = (y - y[0]) / (y[-1] - y[0] + 1e-12)
     return float(y[np.argmax(x - yn)])     # distance below the diagonal
 
+
+
+# ------------------------------------------------------------------------------
+# Plotting helpers
+# matplotlib is imported only when a plot_ method is called, so the module still
+# works without it. Every plot_ method takes an optional `ax` (or returns a whole
+# figure for multi-panel charts) and returns it, so students can restyle it with
+# ordinary matplotlib: ax.set_title(...), ax.figure.savefig(...), etc.
+# ------------------------------------------------------------------------------
+_SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",       # fixed categorical order,
+           "#e87ba4", "#008300", "#6250d6", "#e34948"]       # colourblind-checked
+_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]         # second cue besides colour
+_INK, _INK2, _MUTED = "#0b0b0b", "#52514e", "#898781"
+_GRID, _AXIS, _SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+_BASELINE = "#c3c2b7"                                        # dummy / noise / "other"
+_SEQ = ["#e8f1fd", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+_DIV = ["#184f95", "#3987e5", "#9ec5f4", "#f0efec", "#f2b0ac", "#e34948", "#a62b2b"]
+
+
+def _plt():
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("plotting needs matplotlib:  pip install matplotlib") from e
+    return plt
+
+
+def _fmt(v):
+    """Readable number for labels: 53,350 / 55.3 / 0.639 / 3.40e-05."""
+    if v is None or not np.isfinite(v):
+        return ""
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 10:
+        return f"{v:.1f}"
+    if a >= 0.001 or a == 0:
+        return f"{v:.3f}"
+    return f"{v:.2e}"
+
+
+def _thousands(ax, axis="both"):
+    """Comma thousands separators on large-valued axes (53,000 not 53000)."""
+    from matplotlib.ticker import FuncFormatter
+    f = FuncFormatter(lambda x, _: f"{x:,.0f}" if abs(x) >= 1000 else f"{x:g}")
+    if axis in ("x", "both"):
+        ax.xaxis.set_major_formatter(f)
+    if axis in ("y", "both"):
+        ax.yaxis.set_major_formatter(f)
+
+
+def _cmap(colors, name):
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(name, colors)
+
+
+def _style(ax, grid="x"):
+    ax.set_facecolor(_SURFACE)
+    ax.figure.set_facecolor(_SURFACE)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_color(_AXIS)
+    ax.tick_params(colors=_INK2, labelsize=9, length=3, color=_AXIS)
+    ax.xaxis.label.set_color(_INK2)
+    ax.yaxis.label.set_color(_INK2)
+    ax.grid(False)
+    if grid:
+        ax.grid(axis=grid, color=_GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+    return ax
+
+
+def _axes(ax, figsize, grid="x"):
+    if ax is None:
+        _, ax = _plt().subplots(figsize=figsize)
+    return _style(ax, grid)
+
+
+def _title(ax, title, subtitle=None):
+    ax.set_title(title, loc="left", fontsize=12, color=_INK, fontweight="bold",
+                 pad=22 if subtitle else 8)
+    if subtitle:
+        ax.text(0, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=_INK2, va="bottom")
+
+
+def _legend(ax, ncol=3, **kw):
+    leg = ax.legend(frameon=False, fontsize=9, ncol=ncol, loc="upper center",
+                    bbox_to_anchor=(0.5, -0.16), labelcolor=_INK2, **kw)
+    return leg
+
+
+def _ranked_bars(ax, labels, values, errors=None, muted=None):
+    """Horizontal bars, best on top. Direct value labels on the best and muted rows only."""
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    y = np.arange(n)[::-1]
+    muted = np.zeros(n, bool) if muted is None else np.asarray(muted, bool)
+    err = None if errors is None else np.nan_to_num(np.asarray(errors, dtype=float))
+    ax.barh(y, np.nan_to_num(values), height=0.62, edgecolor=_SURFACE, linewidth=1,
+            color=[_BASELINE if m else _SERIES[0] for m in muted])
+    if err is not None:
+        ax.errorbar(np.nan_to_num(values), y, xerr=err, fmt="none", ecolor=_INK2,
+                    elinewidth=1, capsize=2)
+    ax.set_yticks(y, labels)
+    ax.axvline(0, color=_AXIS, linewidth=1)
+    for i in sorted({0, *np.flatnonzero(muted)}):
+        v = values[i]
+        if np.isnan(v):
+            continue
+        end = v + (err[i] if err is not None else 0) * (1 if v >= 0 else -1)
+        ax.annotate(_fmt(v), (end, y[i]), xytext=(4 if v >= 0 else -4, 0),
+                    textcoords="offset points", va="center", ha="left" if v >= 0 else "right",
+                    fontsize=8.5, color=_INK)
+    ax.margins(x=0.1)
+    ax.grid(axis="y", visible=False)
+    _thousands(ax, "x")
+
+
+def _dumbbell(ax, labels, start, tuned, extra=None, extra_label=None):
+    """Start -> tuned dots joined by a line (small differences stay visible)."""
+    y = np.arange(len(labels))[::-1]
+    for yi, a, b in zip(y, start, tuned):
+        ax.plot([a, b], [yi, yi], color=_AXIS, linewidth=2, zorder=1)
+    kw = dict(s=60, zorder=3, edgecolor=_SURFACE, linewidth=1.5)
+    ax.scatter(start, y, color=_SERIES[0], marker="o", label="Starting values (CV)", **kw)
+    ax.scatter(tuned, y, facecolor="none", edgecolor=_SERIES[1], marker="s", s=150, linewidth=2,
+               zorder=4, label="Tuned (CV)")      # hollow, so an unchanged start dot shows through
+    if extra is not None:
+        ax.scatter(extra, y, color=_SERIES[2], marker="D", label=extra_label, **kw)
+    ax.set_yticks(y, labels)
+    ax.margins(y=0.25, x=0.15)
+    ax.grid(axis="y", visible=False)
+    _thousands(ax, "x")
+    _legend(ax)
 
 # ------------------------------------------------------------------------------
 # Main class
@@ -541,6 +683,232 @@ class ClusterPicker:
             return self.leaderboard_.index[0]
         raise RuntimeError("run compare_models() or tune_top() first, or pass a model_id")
 
+    # ------------------------------------------------------------- plots (v2)
+    def _cluster_style(self, labels):
+        """Fixed colour + marker per cluster (same in every chart). Clusters past the
+        8th share one grey 'other' style rather than recycling colours."""
+        ids = [c for c in np.unique(labels) if c != -1]
+        style = {}
+        for i, c in enumerate(ids):
+            style[c] = ((_SERIES[i], _MARKERS[i], f"Cluster {c}") if i < 8
+                        else (_BASELINE, "o", "Other clusters"))
+        if -1 in labels:
+            style[-1] = ("#d9d8d2", "x", "Noise")
+        return style
+
+    def plot_k_scan(self):
+        """Six panels: the k-scan metrics (best k marked on each) plus a summary of which
+        k each metric prefers. For inertia, the 'best' k is the elbow of the curve."""
+        scan = self.k_scan_ if self.k_scan_ is not None else self.k_scan()
+        ks = scan.index.to_numpy()
+        panels = [("Inertia", "elbow"), ("Silhouette", "max"), ("Calinski-Harabasz", "max"),
+                  ("Davies-Bouldin", "min"), ("GMM BIC", "min")]
+        fig, axes = _plt().subplots(2, 3, figsize=(13, 7))
+        best = {}
+        for ax, (col, rule) in zip(axes.flat, panels):
+            _style(ax, "y")
+            v = scan[col].to_numpy()
+            if rule == "elbow":
+                xn = (ks - ks[0]) / (ks[-1] - ks[0] or 1)
+                yn = (v - v.min()) / (np.ptp(v) or 1)
+                i = int(np.argmax((1 - xn) - yn)) if len(ks) > 2 else 0
+            else:
+                i = int(np.argmax(v) if rule == "max" else np.argmin(v))
+            best[col] = int(ks[i])
+            ax.plot(ks, v, color=_SERIES[0], linewidth=2, marker="o", markersize=5)
+            ax.scatter([ks[i]], [v[i]], s=110, color=_SERIES[1], marker="s", zorder=3,
+                       edgecolor=_SURFACE, linewidth=1.5)
+            ax.annotate(f"k={ks[i]}", (ks[i], v[i]), xytext=(8, 6), textcoords="offset points",
+                        fontsize=9, color=_INK)
+            ax.axvline(self.ctx.k, color=_MUTED, linestyle=":", linewidth=1)
+            ax.set_xticks(ks)
+            ax.set_xlabel("k")
+            if np.nanmax(np.abs(v)) >= 1000:
+                _thousands(ax, "y")
+            ax.set_title(f"{col}  ({'elbow' if rule == 'elbow' else 'higher' if rule == 'max' else 'lower'}"
+                         f"{'' if rule == 'elbow' else ' is better'})", loc="left", fontsize=10.5, color=_INK)
+        last = axes.flat[-1]
+        last.axis("off")
+        last.set_facecolor(_SURFACE)
+        lines = ["Best k by metric", ""] + [f"{m:<20}{k}" for m, k in best.items()]
+        lines += ["", f"Starting k used:    {self.ctx.k}", "(dotted line on each panel)"]
+        last.text(0.05, 0.95, "\n".join(lines), va="top", family="monospace", fontsize=10, color=_INK)
+        fig.suptitle("How many clusters? KMeans scan (GMM for BIC)", x=0.01, ha="left",
+                     fontsize=13, fontweight="bold", color=_INK)
+        fig.set_facecolor(_SURFACE)
+        fig.tight_layout()
+        return fig
+
+    def plot_leaderboard(self, metric: str | None = None, ax=None):
+        """Bar chart of the compare_models() results, best on top. Models flagged in the
+        Note column (too much noise, < 2 clusters) are grey."""
+        if self.leaderboard_ is None:
+            raise RuntimeError("run compare_models() first")
+        metric = metric or self.sort
+        if metric not in self.leaderboard_:
+            raise ValueError(f"metric must be a leaderboard column, e.g. {list(_INTERNAL)}")
+        hb = self._higher_better(metric)
+        lb = self.leaderboard_.assign(_ok=self.leaderboard_["Note"] == "").sort_values(
+            ["_ok", metric], ascending=[False, not hb], na_position="last")
+        labels = [f"{m} (k={k})" + (f" - {n}" if n else "") for m, k, n in
+                  zip(lb["Model"], lb["Clusters"], lb["Note"])]
+        ax = _axes(ax, (8, 0.3 * len(lb) + 1.6))
+        _ranked_bars(ax, labels, lb[metric], muted=~lb["_ok"].to_numpy())
+        ax.set_xlabel(metric)
+        _title(ax, f"Model comparison: {metric}",
+               f"{'higher' if hb else 'lower'} is better - grey = flagged in the Note column")
+        return ax
+
+    def plot_tuning(self, ax=None):
+        """Starting vs tuned score for each tuned model (number of clusters in the label)."""
+        if self.tuned_ is None:
+            raise RuntimeError("run tune_top() first")
+        t = self.tuned_
+        metric = [c for c in t.columns if c.endswith("(start)")][0].replace(" (start)", "")
+        labels = [f"{m}  [k={k}, kept: {kept}]" for m, k, kept in zip(t["Model"], t["Clusters"], t["Kept"])]
+        ax = _axes(ax, (8, 0.55 * len(t) + 1.8))
+        _dumbbell(ax, labels, t[f"{metric} (start)"], t[f"{metric} (tuned)"])
+        ax.set_xlabel(metric)
+        _title(ax, f"Tuning results: {metric}",
+               f"{'higher' if self._higher_better(metric) else 'lower'} is better - axis zoomed in to show small changes")
+        return ax
+
+    def _projection(self):
+        """2-D view of the data: the original columns if there are exactly two numeric
+        features, otherwise the first two principal components of the scaled data."""
+        if self.Xt.shape[1] == 2 and len(self.num_cols) == 2:
+            return self.X[self.num_cols].to_numpy(), self.num_cols[0], self.num_cols[1], "Original columns"
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=2, random_state=self.seed).fit(self.Xt)
+        xy = pca.transform(self.Xt)
+        ev = pca.explained_variance_ratio_ * 100
+        return (xy, f"PC1 ({ev[0]:.0f}% of variance)", f"PC2 ({ev[1]:.0f}% of variance)",
+                f"PCA view - {ev.sum():.0f}% of the variance shown")
+
+    def plot_clusters(self, model_id: str | None = None, ax=None):
+        """Scatter of every row coloured (and shaped) by cluster. Uses the two original
+        columns when there are only two, otherwise a 2-D PCA projection."""
+        mid = model_id or self.best_model_id()
+        labels = self.labels(mid)
+        xy, xl, yl, how = self._projection()
+        ax = _axes(ax, (7.5, 6), grid="both")
+        idx = np.random.default_rng(self.seed).permutation(len(labels))[:5000]
+        style = self._cluster_style(labels)
+        seen = set()
+        for c in sorted(style, key=lambda c: (c == -1, c)):
+            col, mk, name = style[c]
+            m = idx[labels[idx] == c]
+            ax.scatter(xy[m, 0], xy[m, 1], s=26 if c != -1 else 18, color=col, marker=mk,
+                       edgecolor=_SURFACE if mk != "x" else None, linewidth=0.6 if mk != "x" else 1,
+                       alpha=0.85, label=None if name in seen else f"{name} ({(labels == c).sum():,})")
+            seen.add(name)
+        ax.set_xlabel(xl)
+        ax.set_ylabel(yl)
+        _thousands(ax)
+        k = len([c for c in style if c != -1])
+        _title(ax, f"{self.specs[mid].name}: {k} clusters", how)
+        _legend(ax, ncol=min(4, len(seen)))
+        return ax
+
+    def plot_silhouette(self, model_id: str | None = None, ax=None):
+        """Silhouette value of every point, grouped by cluster. Long bars = well placed;
+        values below 0 = the point sits closer to another cluster."""
+        from sklearn.metrics import silhouette_samples
+        mid = model_id or self.best_model_id()
+        labels = self.labels(mid)
+        mask = np.flatnonzero(labels != -1)
+        if len(np.unique(labels[mask])) < 2:
+            raise ValueError("need at least 2 clusters")
+        if len(mask) > 5000:
+            mask = np.random.default_rng(self.seed).choice(mask, 5000, replace=False)
+        sil = silhouette_samples(self.Xt[mask], labels[mask])
+        lab = labels[mask]
+        style = self._cluster_style(labels)
+        ax = _axes(ax, (7.5, 6), grid="x")
+        y0, ticks, names = 0, [], []
+        for c in sorted(c for c in style if c != -1):
+            v = np.sort(sil[lab == c])
+            ax.fill_betweenx(np.arange(y0, y0 + len(v)), 0, v, color=style[c][0], linewidth=0)
+            ticks.append(y0 + len(v) / 2)
+            names.append(f"Cluster {c}")
+            y0 += len(v) + max(4, len(mask) // 60)
+        avg = sil.mean()
+        ax.axvline(avg, color=_INK2, linestyle="--", linewidth=1)
+        ax.annotate(f"average {avg:.3f}", (avg, 1), xycoords=ax.get_xaxis_transform(), xytext=(4, -12),
+                    textcoords="offset points", fontsize=8.5, color=_INK)
+        ax.axvline(0, color=_AXIS, linewidth=1)
+        if len(ticks) <= 20:
+            ax.set_yticks(ticks, names)
+        ax.set_ylim(0, y0)
+        ax.invert_yaxis()
+        ax.set_xlabel("Silhouette value")
+        noise = (labels == -1).mean() * 100
+        _title(ax, f"{self.specs[mid].name}: silhouette by cluster",
+               "Points with values below 0 may be in the wrong cluster"
+               + (f" - {noise:.1f}% noise not shown" if noise else ""))
+        return ax
+
+    def plot_profile(self, model_id: str | None = None, max_features: int = 25, ax=None):
+        """Heatmap of the cluster profile: colour = how far each cluster's average sits
+        from the overall average (in standard deviations, red above / blue below);
+        the numbers are the actual averages in original units."""
+        if not self.num_cols:
+            raise ValueError("plot_profile() needs numeric columns - use profile() for categories")
+        mid = model_id or self.best_model_id()
+        labels = self.labels(mid)
+        X = self.X[self.num_cols]
+        means = X.groupby(labels).mean()
+        z = (means - X.mean()) / X.std(ddof=0).replace(0, 1)
+        if len(z.columns) > max_features:
+            keep = z.abs().max().sort_values(ascending=False).index[:max_features]
+            z, means = z[keep], means[keep]
+        sizes = pd.Series(labels).value_counts()
+        rows = [("Noise" if c == -1 else f"Cluster {c}") + f"  (n={sizes[c]:,})" for c in z.index]
+        lim = max(1.0, float(np.nanmax(np.abs(z.to_numpy()))))
+        nr, nc = z.shape
+        ax = _axes(ax, (max(6, 1.25 * nc + 3), 0.55 * nr + 2), grid=None)
+        im = ax.imshow(z.to_numpy(), cmap=_cmap(_DIV, "div"), vmin=-lim, vmax=lim, aspect="auto")
+        for (i, j), v in np.ndenumerate(means.to_numpy()):
+            zz = z.iat[i, j]
+            ax.text(j, i, _fmt(v), ha="center", va="center", fontsize=9,
+                    color="#ffffff" if abs(zz) > 0.6 * lim else _INK)
+        ax.set_xticks(range(nc), z.columns, rotation=30 if nc > 4 else 0, ha="right" if nc > 4 else "center")
+        ax.set_yticks(range(nr), rows)
+        for s in ax.spines.values():
+            s.set_visible(False)
+        cb = ax.figure.colorbar(im, ax=ax, fraction=0.035, pad=0.03)
+        cb.set_label("SDs from the overall average", color=_INK2, fontsize=9)
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(colors=_INK2, labelsize=8)
+        _title(ax, f"{self.specs[mid].name}: cluster profiles",
+               "Numbers = cluster averages in original units")
+        return ax
+
+    def plot_crosstab(self, model_id: str | None = None, ax=None):
+        """Only with ground_truth: how the true labels spread across the clusters."""
+        if self.y_true is None:
+            raise ValueError("plot_crosstab() needs ground_truth= when creating the picker")
+        mid = model_id or self.best_model_id()
+        labels = self.labels(mid)
+        ct = pd.crosstab(pd.Series(self.y_true, name="truth"), pd.Series(labels, name="cluster"))
+        nr, nc = ct.shape
+        ax = _axes(ax, (max(5, 0.9 * nc + 3), 0.6 * nr + 2), grid=None)
+        ax.imshow(ct.to_numpy(), cmap=_cmap(_SEQ, "seq"), vmin=0, aspect="auto")
+        mx = ct.to_numpy().max()
+        for (i, j), v in np.ndenumerate(ct.to_numpy()):
+            ax.text(j, i, f"{v:,}", ha="center", va="center", fontsize=10,
+                    color="#ffffff" if v > 0.55 * mx else _INK)
+        ax.set_xticks(range(nc), ["Noise" if c == -1 else str(c) for c in ct.columns])
+        ax.set_yticks(range(nr), [str(i) for i in ct.index])
+        ax.set_xlabel("Cluster")
+        ax.set_ylabel("True label")
+        for s in ax.spines.values():
+            s.set_visible(False)
+        s = self._score(labels)
+        _title(ax, f"{self.specs[mid].name}: clusters vs true labels",
+               f"ARI {s['ARI']:.3f} - NMI {s['NMI']:.3f} (1 = perfect match)")
+        return ax
+
     def summary(self) -> str:
         """Plain-text recap: data facts, starting values, winner and its hyperparameters."""
         c = self.ctx
@@ -569,3 +937,7 @@ if __name__ == "__main__":  # quick demo:  python cluster_picker.py
     print(cl.tune_top(n=3, n_iter=20))
     print(cl.summary())
     print(cl.profile())
+    import matplotlib.pyplot as plt
+    cl.plot_k_scan(); cl.plot_leaderboard(); cl.plot_tuning(); cl.plot_clusters()
+    cl.plot_silhouette(); cl.plot_profile(); cl.plot_crosstab()
+    plt.show()

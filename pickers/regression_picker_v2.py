@@ -1,9 +1,14 @@
 """
-regression_picker.py
-====================
+regression_picker_v2.py
+=======================
 
 PyCaret-style model selection for REGRESSION (numeric target) using scikit-learn,
 with optional XGBoost / LightGBM / CatBoost if they are installed.
+
+Version 2 adds charts (matplotlib, loaded only when a plot_ method is called):
+  plot_leaderboard()  plot_tuning()  plot_prediction_error()  plot_residuals()
+  plot_feature_importance()
+Each returns the matplotlib Axes (or Figure), so it can be restyled or saved.
 
 The module does two jobs:
   1. compare_models()  -> cross-validates every candidate model and ranks them
@@ -25,12 +30,14 @@ Everything happens inside a Pipeline, so there is no leakage across CV folds.
 
 Example
 -------
->>> from regression_picker import RegressionPicker
+>>> from regression_picker_v2 import RegressionPicker
 >>> rp = RegressionPicker(df, target="price")
 >>> rp.compare_models()            # leaderboard (DataFrame)
 >>> rp.tune_top(n=3)               # tuned results for the top 3
 >>> rp.recommended_params_         # {model_id: {param: value}}
 >>> model = rp.finalize("hgb")     # refit best version on ALL the data
+>>> rp.plot_leaderboard()          # charts: see the plot_ methods
+>>> rp.plot_prediction_error()
 """
 
 from __future__ import annotations
@@ -343,6 +350,141 @@ def _holdout_scores(y_true, y_pred):
             "MAPE": mean_absolute_percentage_error(y_true, y_pred)}
 
 
+
+# ------------------------------------------------------------------------------
+# Plotting helpers
+# matplotlib is imported only when a plot_ method is called, so the module still
+# works without it. Every plot_ method takes an optional `ax` (or returns a whole
+# figure for multi-panel charts) and returns it, so students can restyle it with
+# ordinary matplotlib: ax.set_title(...), ax.figure.savefig(...), etc.
+# ------------------------------------------------------------------------------
+_SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",       # fixed categorical order,
+           "#e87ba4", "#008300", "#6250d6", "#e34948"]       # colourblind-checked
+_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]         # second cue besides colour
+_INK, _INK2, _MUTED = "#0b0b0b", "#52514e", "#898781"
+_GRID, _AXIS, _SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+_BASELINE = "#c3c2b7"                                        # dummy / noise / "other"
+_SEQ = ["#e8f1fd", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+_DIV = ["#184f95", "#3987e5", "#9ec5f4", "#f0efec", "#f2b0ac", "#e34948", "#a62b2b"]
+
+
+def _plt():
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("plotting needs matplotlib:  pip install matplotlib") from e
+    return plt
+
+
+def _fmt(v):
+    """Readable number for labels: 53,350 / 55.3 / 0.639 / 3.40e-05."""
+    if v is None or not np.isfinite(v):
+        return ""
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 10:
+        return f"{v:.1f}"
+    if a >= 0.001 or a == 0:
+        return f"{v:.3f}"
+    return f"{v:.2e}"
+
+
+def _thousands(ax, axis="both"):
+    """Comma thousands separators on large-valued axes (53,000 not 53000)."""
+    from matplotlib.ticker import FuncFormatter
+    f = FuncFormatter(lambda x, _: f"{x:,.0f}" if abs(x) >= 1000 else f"{x:g}")
+    if axis in ("x", "both"):
+        ax.xaxis.set_major_formatter(f)
+    if axis in ("y", "both"):
+        ax.yaxis.set_major_formatter(f)
+
+
+def _cmap(colors, name):
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(name, colors)
+
+
+def _style(ax, grid="x"):
+    ax.set_facecolor(_SURFACE)
+    ax.figure.set_facecolor(_SURFACE)
+    for s in ("top", "right"):
+        ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"):
+        ax.spines[s].set_color(_AXIS)
+    ax.tick_params(colors=_INK2, labelsize=9, length=3, color=_AXIS)
+    ax.xaxis.label.set_color(_INK2)
+    ax.yaxis.label.set_color(_INK2)
+    ax.grid(False)
+    if grid:
+        ax.grid(axis=grid, color=_GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+    return ax
+
+
+def _axes(ax, figsize, grid="x"):
+    if ax is None:
+        _, ax = _plt().subplots(figsize=figsize)
+    return _style(ax, grid)
+
+
+def _title(ax, title, subtitle=None):
+    ax.set_title(title, loc="left", fontsize=12, color=_INK, fontweight="bold",
+                 pad=22 if subtitle else 8)
+    if subtitle:
+        ax.text(0, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=_INK2, va="bottom")
+
+
+def _legend(ax, ncol=3, **kw):
+    leg = ax.legend(frameon=False, fontsize=9, ncol=ncol, loc="upper center",
+                    bbox_to_anchor=(0.5, -0.16), labelcolor=_INK2, **kw)
+    return leg
+
+
+def _ranked_bars(ax, labels, values, errors=None, muted=None):
+    """Horizontal bars, best on top. Direct value labels on the best and muted rows only."""
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+    y = np.arange(n)[::-1]
+    muted = np.zeros(n, bool) if muted is None else np.asarray(muted, bool)
+    err = None if errors is None else np.nan_to_num(np.asarray(errors, dtype=float))
+    ax.barh(y, np.nan_to_num(values), height=0.62, edgecolor=_SURFACE, linewidth=1,
+            color=[_BASELINE if m else _SERIES[0] for m in muted])
+    if err is not None:
+        ax.errorbar(np.nan_to_num(values), y, xerr=err, fmt="none", ecolor=_INK2,
+                    elinewidth=1, capsize=2)
+    ax.set_yticks(y, labels)
+    ax.axvline(0, color=_AXIS, linewidth=1)
+    for i in sorted({0, *np.flatnonzero(muted)}):
+        v = values[i]
+        if np.isnan(v):
+            continue
+        end = v + (err[i] if err is not None else 0) * (1 if v >= 0 else -1)
+        ax.annotate(_fmt(v), (end, y[i]), xytext=(4 if v >= 0 else -4, 0),
+                    textcoords="offset points", va="center", ha="left" if v >= 0 else "right",
+                    fontsize=8.5, color=_INK)
+    ax.margins(x=0.1)
+    ax.grid(axis="y", visible=False)
+    _thousands(ax, "x")
+
+
+def _dumbbell(ax, labels, start, tuned, extra=None, extra_label=None):
+    """Start -> tuned dots joined by a line (small differences stay visible)."""
+    y = np.arange(len(labels))[::-1]
+    for yi, a, b in zip(y, start, tuned):
+        ax.plot([a, b], [yi, yi], color=_AXIS, linewidth=2, zorder=1)
+    kw = dict(s=60, zorder=3, edgecolor=_SURFACE, linewidth=1.5)
+    ax.scatter(start, y, color=_SERIES[0], marker="o", label="Starting values (CV)", **kw)
+    ax.scatter(tuned, y, facecolor="none", edgecolor=_SERIES[1], marker="s", s=150, linewidth=2,
+               zorder=4, label="Tuned (CV)")      # hollow, so an unchanged start dot shows through
+    if extra is not None:
+        ax.scatter(extra, y, color=_SERIES[2], marker="D", label=extra_label, **kw)
+    ax.set_yticks(y, labels)
+    ax.margins(y=0.25, x=0.15)
+    ax.grid(axis="y", visible=False)
+    _thousands(ax, "x")
+    _legend(ax)
+
 # ------------------------------------------------------------------------------
 # Main class
 # ------------------------------------------------------------------------------
@@ -568,6 +710,119 @@ class RegressionPicker:
         y = pd.concat([self.y_train, self.y_test])
         return clone(self.get_model(model_id)).fit(X, y)
 
+    # ------------------------------------------------------------- plots (v2)
+    def _default_model(self, model_id=None):
+        if model_id:
+            return model_id
+        if self.tuned_ is not None:
+            return self.tuned_.index[0]
+        if self.leaderboard_ is not None:
+            return next(m for m in self.leaderboard_.index if m != "dummy")
+        raise RuntimeError("run compare_models() first, or pass a model_id")
+
+    def plot_leaderboard(self, metric: str | None = None, top: int | None = None, ax=None):
+        """Bar chart of the compare_models() results, best on top (dummy baseline in grey).
+
+        metric : any leaderboard metric (default: the sort metric). Error bars (+/-1 SD
+                 across CV folds) are shown for the sort metric.
+        top    : show only the best `top` models (the dummy baseline is always kept).
+        """
+        if self.leaderboard_ is None:
+            raise RuntimeError("run compare_models() first")
+        metric = metric or self.sort
+        if metric not in _SCORERS:
+            raise ValueError(f"metric must be one of {list(_SCORERS)}")
+        hb = _HIGHER_IS_BETTER[metric]
+        lb = self.leaderboard_.sort_values(metric, ascending=not hb)
+        if top:
+            lb = lb[(np.arange(len(lb)) < top) | (lb.index == "dummy")]
+        err_col = f"{metric} SD"
+        err = lb[err_col] if err_col in lb else None
+        ax = _axes(ax, (8, 0.3 * len(lb) + 1.6))
+        _ranked_bars(ax, lb["Model"], lb[metric], err, muted=lb.index == "dummy")
+        ax.set_xlabel(metric)
+        sub = (f"{self.cv.get_n_splits()}-fold CV on the training split - "
+               f"{'higher' if hb else 'lower'} is better" + (" - bars show +/-1 SD" if err is not None else ""))
+        _title(ax, f"Model comparison: {metric}", sub)
+        return ax
+
+    def plot_tuning(self, ax=None):
+        """Starting vs tuned CV score for each tuned model, plus the holdout score."""
+        if self.tuned_ is None:
+            raise RuntimeError("run tune_top() first")
+        t = self.tuned_
+        labels = [f"{m}  [kept: {k}]" for m, k in zip(t["Model"], t["Kept"])]
+        ax = _axes(ax, (8, 0.55 * len(t) + 1.8))
+        _dumbbell(ax, labels, t[f"CV {self.sort} (start)"], t[f"CV {self.sort} (tuned)"],
+                  t[f"Holdout {self.sort}"], "Holdout (kept version)")
+        ax.set_xlabel(self.sort)
+        hb = _HIGHER_IS_BETTER[self.sort]
+        _title(ax, f"Tuning results: {self.sort}",
+               f"{'higher' if hb else 'lower'} is better - axis zoomed in to show small changes")
+        return ax
+
+    def plot_prediction_error(self, model_id: str | None = None, ax=None):
+        """Predicted vs actual on the holdout set. Points on the diagonal are perfect."""
+        mid = self._default_model(model_id)
+        pred = self.get_model(mid).predict(self.X_test)
+        y = self.y_test.to_numpy()
+        ax = _axes(ax, (6, 6), grid="both")
+        idx = np.random.default_rng(self.seed).permutation(len(y))[:5000]
+        ax.scatter(y[idx], pred[idx], s=12, alpha=0.5, color=_SERIES[0], linewidths=0)
+        lo, hi = min(y.min(), pred.min()), max(y.max(), pred.max())
+        ax.plot([lo, hi], [lo, hi], color=_INK2, linewidth=1, linestyle="--", label="Perfect prediction")
+        ax.set_xlabel(f"Actual {self.target}")
+        ax.set_ylabel(f"Predicted {self.target}")
+        h = _holdout_scores(y, pred)
+        _title(ax, f"{self.specs[mid].name}: predicted vs actual",
+               f"Holdout set - R2 {h['R2']:.3f} - RMSE {_fmt(h['RMSE'])}")
+        _thousands(ax)
+        _legend(ax, ncol=1)
+        return ax
+
+    def plot_residuals(self, model_id: str | None = None):
+        """Two panels: residuals vs predicted (look for patterns) and the residual histogram."""
+        mid = self._default_model(model_id)
+        pred = self.get_model(mid).predict(self.X_test)
+        resid = self.y_test.to_numpy() - pred
+        fig, (a1, a2) = _plt().subplots(1, 2, figsize=(12, 4.5), gridspec_kw={"width_ratios": [3, 2]})
+        _style(a1, "both")
+        _style(a2, "y")
+        idx = np.random.default_rng(self.seed).permutation(len(pred))[:5000]
+        a1.scatter(pred[idx], resid[idx], s=12, alpha=0.5, color=_SERIES[0], linewidths=0)
+        a1.axhline(0, color=_INK2, linewidth=1, linestyle="--")
+        a1.set_xlabel(f"Predicted {self.target}")
+        a1.set_ylabel("Residual (actual - predicted)")
+        _title(a1, f"{self.specs[mid].name}: residuals", "Holdout set - a random cloud around 0 is good")
+        a2.hist(resid, bins=40, color=_SERIES[0], edgecolor=_SURFACE, linewidth=1)
+        a2.axvline(0, color=_INK2, linewidth=1, linestyle="--")
+        a2.set_xlabel("Residual")
+        a2.set_ylabel("Rows")
+        _title(a2, "Residual distribution", f"mean {_fmt(resid.mean())} - sd {_fmt(resid.std())}")
+        _thousands(a1)
+        _thousands(a2, "x")
+        fig.tight_layout()
+        return fig
+
+    def plot_feature_importance(self, model_id: str | None = None, top: int = 15,
+                                n_repeats: int = 5, ax=None):
+        """Permutation importance on the holdout set: how much the score drops when one
+        ORIGINAL column is shuffled. Works the same way for every model type."""
+        from sklearn.inspection import permutation_importance
+        mid = self._default_model(model_id)
+        pipe = self.get_model(mid)
+        r = permutation_importance(pipe, self.X_test, self.y_test, scoring=_SCORERS[self.sort],
+                                   n_repeats=n_repeats, random_state=self.seed, n_jobs=self.n_jobs)
+        imp = pd.DataFrame({"mean": r.importances_mean, "sd": r.importances_std},
+                           index=self.X_test.columns).sort_values("mean", ascending=False).head(top)
+        ax = _axes(ax, (8, 0.3 * len(imp) + 1.6))
+        _ranked_bars(ax, imp.index, imp["mean"], imp["sd"])
+        verb = "Drop" if _HIGHER_IS_BETTER[self.sort] else "Increase"
+        ax.set_xlabel(f"{verb} in {self.sort} when the column is shuffled")
+        _title(ax, f"{self.specs[mid].name}: feature importance",
+               f"Permutation importance on the holdout set ({n_repeats} repeats, +/-1 SD)")
+        return ax
+
     def summary(self) -> str:
         """Plain-text recap: data facts, winner and its recommended hyperparameters."""
         c = self.ctx
@@ -589,3 +844,7 @@ if __name__ == "__main__":  # quick demo:  python regression_picker.py
     print(rp.compare_models())
     print(rp.tune_top(n=3, n_iter=15))
     print(rp.summary())
+    import matplotlib.pyplot as plt
+    rp.plot_leaderboard(); rp.plot_tuning(); rp.plot_prediction_error()
+    rp.plot_residuals(); rp.plot_feature_importance()
+    plt.show()

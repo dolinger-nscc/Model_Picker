@@ -1,12 +1,12 @@
 """
-cluster_picker_v2.py
+cluster_picker_1a.py
 ====================
 
 PyCaret-style model selection for CLUSTERING (unsupervised, no target) using
-scikit-learn. It follows the same pattern as regression_picker.py and
-classification_picker.py, so students learn one interface for all three.
+scikit-learn. It follows the same pattern as regression_picker_1a.py and
+classification_picker_1a.py, so students learn one interface for all three.
 
-Version 2 adds charts (matplotlib, loaded only when a plot_ method is called):
+Charts (matplotlib, loaded only when a plot_ method is called):
   plot_k_scan()  plot_leaderboard()  plot_tuning()  plot_clusters()
   plot_silhouette()  plot_profile()  plot_crosstab()
 Each returns the matplotlib Axes (or Figure), so it can be restyled or saved.
@@ -53,7 +53,7 @@ bool columns are one-hot encoded.
 
 Example
 -------
->>> from cluster_picker_v2 import ClusterPicker
+>>> from cluster_picker_1a import ClusterPicker
 >>> cl = ClusterPicker(df)
 >>> cl.k_scan()                    # how many clusters?
 >>> cl.compare_models()            # leaderboard
@@ -683,7 +683,7 @@ class ClusterPicker:
             return self.leaderboard_.index[0]
         raise RuntimeError("run compare_models() or tune_top() first, or pass a model_id")
 
-    # ------------------------------------------------------------- plots (v2)
+    # ------------------------------------------------------------- plots
     def _cluster_style(self, labels):
         """Fixed colour + marker per cluster (same in every chart). Clusters past the
         8th share one grey 'other' style rather than recycling colours."""

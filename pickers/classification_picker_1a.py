@@ -1,12 +1,12 @@
 """
-classification_picker_v2.py
+classification_picker_1a.py
 ===========================
 
 PyCaret-style model selection for CLASSIFICATION (category target) using
 scikit-learn, with optional XGBoost / LightGBM / CatBoost if they are installed.
-It mirrors regression_picker.py, so students learn one interface for both.
+It mirrors regression_picker_1a.py, so students learn one interface for both.
 
-Version 2 adds charts (matplotlib, loaded only when a plot_ method is called):
+Charts (matplotlib, loaded only when a plot_ method is called):
   plot_leaderboard()  plot_tuning()  plot_confusion_matrix()  plot_roc()
   plot_precision_recall()  plot_threshold()  plot_feature_importance()
 Each returns the matplotlib Axes (or Figure), so it can be restyled or saved.
@@ -36,7 +36,7 @@ average across classes (change with average="macro").
 
 Example
 -------
->>> from classification_picker_v2 import ClassificationPicker
+>>> from classification_picker_1a import ClassificationPicker
 >>> cp = ClassificationPicker(df, target="churn", positive_class="Yes")
 >>> cp.compare_models()            # leaderboard (DataFrame)
 >>> cp.tune_top(n=3)               # tuned results for the top 3
@@ -775,7 +775,7 @@ class ClassificationPicker:
         pipe = self._best_pipes[model_id] if model_id in self._best_pipes else self._pipeline(self.specs[model_id])
         return LabeledModel(clone(pipe).fit(X, y), self.classes_)
 
-    # ------------------------------------------------------------- plots (v2)
+    # ------------------------------------------------------------- plots
     def _default_model(self, model_id=None):
         if model_id:
             return model_id

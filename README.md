@@ -4,15 +4,15 @@ PyCaret-style model selection built on **scikit-learn**, in three separate, self
 
 | Module | Use it when your target is... | Class |
 |---|---|---|
-| `regression_picker_v2.py` | a **number** (price, sales, temperature) | `RegressionPicker` |
-| `classification_picker_v2.py` | a **category** (Yes/No, species, grade) | `ClassificationPicker` |
-| `cluster_picker_v2.py` | **none**: you want to find groups (segmentation) | `ClusterPicker` |
+| `regression_picker_1a.py` | a **number** (price, sales, temperature) | `RegressionPicker` |
+| `classification_picker_1a.py` | a **category** (Yes/No, species, grade) | `ClassificationPicker` |
+| `cluster_picker_1a.py` | **none**: you want to find groups (segmentation) | `ClusterPicker` |
 
 Each picker does three things:
 
 1. **Compares** every suitable model with cross-validation and ranks them.
 2. **Tunes** the best few and recommends hyperparameters.
-3. **Charts** the results (v2 files only).
+3. **Charts** the results.
 
 > The pickers *select* models and hyperparameters. They expect a **clean DataFrame**, so do your cleaning, feature engineering and EDA first.
 
@@ -29,7 +29,7 @@ Each picker does three things:
 - [ClusterPicker](#clusterpicker)
 - [Common options](#common-options)
 - [Tips and gotchas](#tips-and-gotchas)
-- [v1 vs v2](#v1-vs-v2)
+- [Test notebooks](#test-notebooks)
 
 ---
 
@@ -54,11 +54,11 @@ pip install xgboost lightgbm catboost
 ML/
 ├── pickers/
 │   ├── __init__.py
-│   ├── regression_picker_v2.py
-│   ├── classification_picker_v2.py
-│   └── cluster_picker_v2.py
+│   ├── regression_picker_1a.py
+│   ├── classification_picker_1a.py
+│   └── cluster_picker_1a.py
 ├── tests/
-│   └── test_regression_picker_v2.ipynb
+│   └── test_regression_picker_1a.ipynb
 └── week3/
     └── lab.ipynb
 ```
@@ -66,9 +66,9 @@ ML/
 **`pickers/__init__.py`**, so you can write `from pickers import ...`:
 
 ```python
-from .regression_picker_v2 import RegressionPicker
-from .classification_picker_v2 import ClassificationPicker
-from .cluster_picker_v2 import ClusterPicker
+from .regression_picker_1a import RegressionPicker
+from .classification_picker_1a import ClassificationPicker
+from .cluster_picker_1a import ClusterPicker
 
 __all__ = ["RegressionPicker", "ClassificationPicker", "ClusterPicker"]
 ```
@@ -109,7 +109,7 @@ picker.compare_models()          # 2. ranked table of every model
 picker.tune_top(n=3)             # 3. tune the best 3
 picker.recommended_params_       # 4. the hyperparameters to use
 picker.summary()                 # 5. plain-text recap
-picker.plot_leaderboard()        # 6. charts (v2)
+picker.plot_leaderboard()        # 6. charts
 ```
 
 | Step | Method | Returns |
@@ -199,7 +199,7 @@ predictions = model.predict(new_df)     # new_df has the same columns, minus the
 
 \* skipped when `turbo=True` (the default), because they're slow.
 
-### Charts (v2)
+### Charts
 
 | Method | Shows |
 |---|---|
@@ -269,7 +269,7 @@ model.predict_proba(new_df)             # columns in the order of model.classes_
 
 \* skipped when `turbo=True`. With `sort="AUC"`, `ridge` and `svm` are skipped too, because they give no probability scores.
 
-### Charts (v2)
+### Charts
 
 | Method | Shows |
 |---|---|
@@ -337,7 +337,7 @@ segments = cl.assign_clusters()                 # your df + a 'Cluster' column
 
 **Labelling new rows:** `get_model(id).predict(new_df)` works for `kmeans`, `mbkmeans`, `bkmeans`, `gmm`, `birch`, `ap`, `meanshift`. The others (`hclust`, `spectral`, `dbscan`, `hdbscan`, `optics`) can only label the data they were fitted on; use `labels(id)` or `assign_clusters(id)`.
 
-### Charts (v2)
+### Charts
 
 | Method | Shows |
 |---|---|
@@ -413,26 +413,14 @@ ax.figure.savefig("leaderboard.png", dpi=150, bbox_inches="tight")
 
 ---
 
-## v1 vs v2
-
-| | v1 (`*_picker.py`) | v2 (`*_picker_v2.py`) |
-|---|---|---|
-| Model comparison, tuning, recommendations | ✓ | ✓ (identical) |
-| `plot_` chart methods | n/a | ✓ |
-| Needs matplotlib | no | only when a chart is drawn |
-
-v2 is v1 plus the charts, so any code written for v1 works unchanged with v2.
-
----
-
 ## Test notebooks
 
 Each module has a test notebook in `tests/` that runs it on a well-known public dataset and ends with automatic **PASS/FAIL** checks:
 
 | Notebook | Datasets |
 |---|---|
-| `test_regression_picker_v2.ipynb` | California Housing |
-| `test_classification_picker_v2.ipynb` | IBM Telco Customer Churn (binary), Palmer Penguins (3 classes) |
-| `test_cluster_picker_v2.ipynb` | Mall Customers, Palmer Penguins |
+| `test_regression_picker_1a.ipynb` | California Housing |
+| `test_classification_picker_1a.ipynb` | IBM Telco Customer Churn (binary), Palmer Penguins (3 classes) |
+| `test_cluster_picker_1a.ipynb` | Mall Customers, Palmer Penguins |
 
 Run all cells. Each section should end with **All checks passed**.

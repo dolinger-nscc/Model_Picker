@@ -1,11 +1,11 @@
 """
-regression_picker_v2.py
+regression_picker_1a.py
 =======================
 
 PyCaret-style model selection for REGRESSION (numeric target) using scikit-learn,
 with optional XGBoost / LightGBM / CatBoost if they are installed.
 
-Version 2 adds charts (matplotlib, loaded only when a plot_ method is called):
+Charts (matplotlib, loaded only when a plot_ method is called):
   plot_leaderboard()  plot_tuning()  plot_prediction_error()  plot_residuals()
   plot_feature_importance()
 Each returns the matplotlib Axes (or Figure), so it can be restyled or saved.
@@ -30,7 +30,7 @@ Everything happens inside a Pipeline, so there is no leakage across CV folds.
 
 Example
 -------
->>> from regression_picker_v2 import RegressionPicker
+>>> from regression_picker_1a import RegressionPicker
 >>> rp = RegressionPicker(df, target="price")
 >>> rp.compare_models()            # leaderboard (DataFrame)
 >>> rp.tune_top(n=3)               # tuned results for the top 3
@@ -710,7 +710,7 @@ class RegressionPicker:
         y = pd.concat([self.y_train, self.y_test])
         return clone(self.get_model(model_id)).fit(X, y)
 
-    # ------------------------------------------------------------- plots (v2)
+    # ------------------------------------------------------------- plots
     def _default_model(self, model_id=None):
         if model_id:
             return model_id

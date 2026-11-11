@@ -41,7 +41,7 @@ pip install scikit-learn pandas numpy scipy matplotlib
 pip install xgboost lightgbm catboost
 ```
 
-- **Python:** 3.10 or newer.
+- **Python:** 3.10 or newer (tested on 3.12).
 - **scikit-learn:** 1.4 or newer (tested on 1.9).
 - **matplotlib:** only needed for the `plot_` methods, and loaded only when one is called.
 - **XGBoost / LightGBM / CatBoost:** optional. If they're installed they join the comparison, and if not they're skipped quietly.
